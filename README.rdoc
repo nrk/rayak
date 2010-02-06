@@ -1,0 +1,44 @@
+= Rayak
+
+== Description
+
+Rayak brings the Kayak lightweight C# HTTP sever to IronRuby by providing a Rack 
+handler interface that enables developers to write web applications with their 
+Ruby web framework of choice.
+
+
+== Example
+
+  require 'rubygems'
+  require 'rayak'
+  require 'sinatra'
+
+  set :server, 'kayak'
+
+  get '/' do
+    "OH HAI INTERNET!"
+  end
+
+
+== Requirements
+
+* IronRuby >= 0.9.4
+* Kayak's DLL (binaries shipped in the repository)
+
+
+== Related links
+
+* {IronRuby}[http://github.com/ironruby/ironruby]
+* {Kayak lightweight C# HTTP}[http://kayakhttp.com/]
+* {Kayak on Google Code}[http://code.google.com/p/kayak/]
+
+
+== Author
+
+{Daniele Alessandri}[mailto:suppakilla@gmail.com]
+
+
+== License
+
+Rayak, just like Kayak, is distributed under the terms of the MIT license (see 
+the LICENSE file).
