@@ -31,6 +31,24 @@ class KayakRequest
     end
 end
 
+class KayakResponder
+    include IKayakResponder
+    attr_accessor :handler
+
+    def initialize(handler)
+        @handler = handler
+    end
+
+    def will_respond(context, callback)
+        callback.invoke(true, nil)
+    end
+
+    def respond(context, callback)
+        @handler.process(context.request, context.response)
+        callback.invoke(nil)
+    end
+end
+
 module Rack
     module Handler
         class Kayak
@@ -43,17 +61,13 @@ module Rack
             def self.run(application, options = {})
                 handler = Kayak.new(application)
 
-                server = KayakServer.new
-
-                server.listen_ep = IPEndPoint.new(
+                listen_ep = IPEndPoint.new(
                     IPAddress.parse(options[:Host] || DEFAULT_HOST), 
                     options[:Port] || DEFAULT_PORT
                 )
 
-                server.request_began do |server, args| 
-                    context = args.context
-                    handler.process(context.request, context.response)
-                end
+                server = KayakServer.new
+                server.add_responder(KayakResponder.new(handler))
 
                 yield server if block_given?
 
@@ -66,7 +80,7 @@ module Rack
 
                 server_thread = Thread.new do
                     mutex.synchronize do
-                        server.start
+                        server.start(listen_ep)
                         cv.wait(mutex)
                         server.stop
                     end
@@ -133,7 +147,6 @@ module Rack
                     end
                 ensure
                     body.close if body.respond_to? :close
-                    response.complete
                 end
             end
 
