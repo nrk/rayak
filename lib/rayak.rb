@@ -47,13 +47,11 @@ module Rack
                 handler = Kayak.new(application)
 
                 http, scheduler = *::Kayak.http(
-                    options[:Host] || DEFAULT_HOST, options[:Port] || DEFAULT_PORT
+                    options[:host] || DEFAULT_HOST, options[:port] || DEFAULT_PORT
                 )
                 http.on_request do |sender, args|
                     handler.process(args.request, args.response)
                 end
-
-                yield http if block_given?
 
                 mutex, cv = Mutex.new, ConditionVariable.new
 
@@ -66,10 +64,11 @@ module Rack
                     mutex.synchronize do
                         scheduler.start
                         cv.wait(mutex)
-                        scheduler.close
-                        http.close
+                        scheduler.stop
                     end
                 end
+
+                yield http if block_given?
 
                 server_thread.join
             end
