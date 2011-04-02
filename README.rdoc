@@ -22,15 +22,15 @@ Ruby web framework of choice.
 
 == Requirements
 
-* IronRuby >= 0.9.4
-* Kayak's DLL (binaries shipped in the repository)
+* IronRuby >= v1.1.1
+* Kayak v0.6 (up to commit 7d38b98 - binaries are shipped in the repository)
 
 
 == Related links
 
-* {IronRuby}[http://github.com/ironruby/ironruby]
+* {IronRuby}[http://ironruby.net/]
 * {Kayak lightweight C# HTTP}[http://kayakhttp.com/]
-* {Kayak on Google Code}[http://code.google.com/p/kayak/]
+* {Kayak on GitHub}[http://github.com/kayak/kayak]
 
 
 == Author
