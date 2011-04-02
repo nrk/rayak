@@ -1,9 +1,7 @@
-require 'rubygems'
-require 'rayak'
+# Sinatra - http://github.com/sinatra/sinatra
+
 require 'sinatra'
 require 'haml'
-
-set :server, 'kayak'
 
 helpers do
     def dwn_dir; File.join(Dir.pwd, 'downloads'); end
