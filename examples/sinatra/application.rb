@@ -1,7 +1,6 @@
 require 'rubygems'
 require 'rayak'
 require 'sinatra'
-require 'sinatra-hacks'
 require 'haml'
 
 set :server, 'kayak'

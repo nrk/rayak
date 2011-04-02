@@ -1,33 +1,36 @@
 require 'thread'
 require 'Kayak'
 require 'rack'
+require 'uri'
+require 'pp'
 
 include Kayak
 
-class NameValuePair
-    def to_ary
-        # enables argument unpacking for Kayak::NameValuePair
-        [name.to_s, value.to_s]
+module Kayak
+    include System::Net
+
+    def self.http(ip, port)
+        scheduler = KayakScheduler.new
+        server = KayakServer.new(scheduler)
+        server.listen(IPEndPoint.new(IPAddress.parse(ip), port))
+        [Kayak::Http::Extensions.as_http_server(server), scheduler]
     end
 end
 
-class KayakRequest
-    def body
-        request_body = StringIO.new
-        if content_length > 0
-            input_reader = System::IO::BinaryReader.new(self.InputStream)
-            while self.InputStream.can_read do
-                buffer = input_reader.read_bytes(1024)
-                request_body.write(String.new(buffer))
-            end
-            request_body.rewind
-        end
-        request_body
+class String
+    def to_byte_segment
+        byte_array = System::Array[System::Byte].new(self.GetByteCount)
+        self.GetBytes.each_with_index { |byte, i| byte_array[i] = byte }
+        System::ArraySegment[System::Byte].new(byte_array)
     end
+end
 
-    def input_stream
-        # TODO: how do we get a RubyIO instance from a System::Stream?
-        if content_length > 0 then self.InputStream else StringIO.new end
+class Hash
+    def to_clr_headers
+        clr_dict = System::Collections::Generic::Dictionary[System::String, System::String]
+        self.reduce(clr_dict.new) do |r,(k,v)|
+            r.add(k.to_clr_string, v.to_clr_string); r
+        end
     end
 end
 
@@ -43,19 +46,14 @@ module Rack
             def self.run(application, options = {})
                 handler = Kayak.new(application)
 
-                server = KayakServer.new
-
-                server.listen_ep = IPEndPoint.new(
-                    IPAddress.parse(options[:Host] || DEFAULT_HOST), 
-                    options[:Port] || DEFAULT_PORT
+                http, scheduler = *::Kayak.http(
+                    options[:Host] || DEFAULT_HOST, options[:Port] || DEFAULT_PORT
                 )
-
-                server.request_began do |server, args| 
-                    context = args.context
-                    handler.process(context.request, context.response)
+                http.on_request do |sender, args|
+                    handler.process(args.request, args.response)
                 end
 
-                yield server if block_given?
+                yield http if block_given?
 
                 mutex, cv = Mutex.new, ConditionVariable.new
 
@@ -66,9 +64,10 @@ module Rack
 
                 server_thread = Thread.new do
                     mutex.synchronize do
-                        server.start
+                        scheduler.start
                         cv.wait(mutex)
-                        server.stop
+                        scheduler.close
+                        http.close
                     end
                 end
 
@@ -80,30 +79,25 @@ module Rack
             end
 
             def process(request, response)
+                host, port = *request.headers['Host'].split(':')
+                (*, path, _, query, _) = URI.split(request.uri)
+
                 env = {
-                    'HTTP_VERSION'   => request.http_version.to_s, 
-                    'REQUEST_METHOD' => request.verb.to_s, 
-                    'SCRIPT_NAME'    => '', # TODO
+                    'SERVER_NAME'    => host,
+                    'SERVER_PORT'    => (port || 80).to_i,
+                    'HTTP_VERSION'   => request.version.to_s,
+                    'REQUEST_METHOD' => request.Method.to_s,
+                    'QUERY_STRING'   => query || '',
+                    'SCRIPT_NAME'    => '',
+                    'PATH_INFO'      => path,
                 }
 
-                env['PATH_INFO'] = request.path.to_s
-                unless request.path == '' || request.path[0] == '/'
-                    env['PATH_INFO'].insert(0, '/')
-                end
-
-                url_query = request.request_uri.split('?')
-                env['QUERY_STRING'] = url_query.length == 2 ? url_query[1] : ''
-
-                host, port = *request.headers['Host'].split(':')
-                env['SERVER_NAME'] = host
-                env['SERVER_PORT'] = unless port.nil? then port.to_i else 80 end
-
-                request.headers.each { |k,v| env[rack_header(k)] = v }
+                request.headers.each { |kv| env[rack_header(kv.key)] = kv.value }
 
                 env.update({
                     'rack.version'      => [1, 0],
-                    # sub-optimal, it reads the whole request body into memory
-                    'rack.input'        => request.body,
+                    # disable rack.input for now
+                    'rack.input'        => StringIO.new,
                     'rack.errors'       => $stderr,
                     # kayak does not support https, url_scheme is always 'http'
                     'rack.url_scheme'   => 'http',
@@ -116,24 +110,12 @@ module Rack
                 status, headers, body = *@application.call(env)
 
                 begin
-                    response.status_code = status
-
-                    headers.each do |k,vs| 
-                        vs.each { |v| response.headers[k] = v }
-                    end
-
-                    # TODO: KayakResponse.GetDirectOutputStream(long) returns a 
-                    #       non-buffered System::Stream that writes directly 
-                    #       to the client. It can also initialise a chunked 
-                    #       transfer with its no-arguments overload, so we just 
-                    #       need to check if Content-Length is set.
-                    output_stream = response.output_stream
-                    body.each do |part| 
-                        output_stream.write(part, 0, part.length)
+                    response.write_headers(status.to_s, headers.to_clr_headers)
+                    body.each do |part|
+                        response.write_body(part.to_byte_segment, nil)
                     end
                 ensure
-                    body.close if body.respond_to? :close
-                    response.complete
+                    response.end
                 end
             end
 
