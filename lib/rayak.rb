@@ -52,7 +52,6 @@ module Rack
                 http.on_request do |_, args|
                     body_stream = StringIO.new
                     request, response = args.request, args.response
-                    has_body = request.headers.contains_key('Content-Length')
 
                     if has_body = request.headers.contains_key('Content-Length')
                         request.on_body do |_, args|
