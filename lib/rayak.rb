@@ -2,7 +2,6 @@ require 'thread'
 require 'Kayak'
 require 'rack'
 require 'uri'
-require 'pp'
 
 include Kayak
 
@@ -49,8 +48,29 @@ module Rack
                 http, scheduler = *::Kayak.http(
                     options[:host] || DEFAULT_HOST, options[:port] || DEFAULT_PORT
                 )
-                http.on_request do |sender, args|
-                    handler.process(args.request, args.response)
+
+                http.on_request do |_, args|
+                    body_stream = StringIO.new
+                    request, response = args.request, args.response
+                    has_body = request.headers.contains_key('Content-Length')
+
+                    if has_body = request.headers.contains_key('Content-Length')
+                        request.on_body do |_, args|
+                            body_stream << String.CreateBinary(args.data.array)
+                        end
+                    end
+
+                    request.on_end do |_, _|
+                        if has_body
+                            # Since the Kayak::Http::Response#on_body event actually returns
+                            # the whole HTTP message including the headers, we must position
+                            # the stream at the end of the headers part. It is truly hackish,
+                            # but it will do for now.
+                            body_stream.rewind
+                            while body_stream.gets != "\r\n" do end
+                        end
+                        handler.process(request, response, body_stream)
+                    end
                 end
 
                 mutex, cv = Mutex.new, ConditionVariable.new
@@ -77,7 +97,7 @@ module Rack
                 @application = application
             end
 
-            def process(request, response)
+            def process(request, response, request_body_stream)
                 host, port = *request.headers['Host'].split(':')
                 (*, path, _, query, _) = URI.split(request.uri)
 
@@ -96,7 +116,7 @@ module Rack
                 env.update({
                     'rack.version'      => [1, 0],
                     # disable rack.input for now
-                    'rack.input'        => StringIO.new,
+                    'rack.input'        => request_body_stream,
                     'rack.errors'       => $stderr,
                     # kayak does not support https, url_scheme is always 'http'
                     'rack.url_scheme'   => 'http',
