@@ -23,7 +23,7 @@ Ruby web framework of choice.
 == Requirements
 
 * IronRuby >= v1.1.1
-* Kayak v0.6 (commit 59ee102 - binaries are shipped in the repository)
+* Kayak v0.6 (commit >= 59ee102 - binaries are shipped in the repository)
 
 
 == Related links
