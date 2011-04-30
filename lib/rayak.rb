@@ -3,8 +3,6 @@ require 'Kayak'
 require 'rack'
 require 'uri'
 
-include Kayak
-
 module Kayak
     include System::Net
 
@@ -12,7 +10,7 @@ module Kayak
         scheduler = KayakScheduler.new
         server = KayakServer.new(scheduler)
         server.listen(IPEndPoint.new(IPAddress.parse(ip), port))
-        [Kayak::Http::Extensions.as_http_server(server), scheduler]
+        [Http::Extensions.as_http_server(server), scheduler]
     end
 end
 
@@ -27,7 +25,7 @@ end
 class Hash
     def to_clr_headers
         clr_dict = System::Collections::Generic::Dictionary[System::String, System::String]
-        self.reduce(clr_dict.new) do |r,(k,v)|
+        reduce(clr_dict.new) do |r,(k,v)|
             r.add(k.to_clr_string, v.to_clr_string); r
         end
     end
@@ -114,7 +112,6 @@ module Rack
 
                 env.update({
                     'rack.version'      => [1, 0],
-                    # disable rack.input for now
                     'rack.input'        => request_body_stream,
                     'rack.errors'       => $stderr,
                     # kayak does not support https, url_scheme is always 'http'
