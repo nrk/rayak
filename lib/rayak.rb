@@ -23,10 +23,6 @@ end
 module Rayak
     class SchedulerHandler
         include Kayak::ISchedulerDelegate
-
-        def on_exception(scheduler, exception)
-            pp exception.inner_exceptions
-        end
     end
 
     class RequestHandler
