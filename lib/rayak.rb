@@ -3,17 +3,6 @@ require 'Kayak'
 require 'rack'
 require 'uri'
 
-module Kayak
-    include System::Net
-
-    def self.http(ip, port)
-        scheduler = KayakScheduler.new
-        server = KayakServer.new(scheduler)
-        server.listen(IPEndPoint.new(IPAddress.parse(ip), port))
-        [Http::Extensions.as_http_server(server), scheduler]
-    end
-end
-
 class String
     def to_byte_segment
         byte_array = System::Array[System::Byte].new(self.GetByteCount)
@@ -31,10 +20,108 @@ class Hash
     end
 end
 
+module Rayak
+    class SchedulerHandler
+        include Kayak::ISchedulerDelegate
+
+        def on_exception(scheduler, exception)
+            pp exception.inner_exceptions
+        end
+    end
+
+    class RequestHandler
+        include Kayak::Http::IHttpRequestDelegate
+
+        def initialize(on_request)
+            @on_request = on_request
+        end
+
+        def on_request(request, body, response)
+            @on_request.call(request, body, response) if @on_request
+        end
+    end
+
+    class Request
+        include Kayak::IDataConsumer
+
+        def initialize(head, body, &block)
+            @head = head
+            @body = body
+            @on_end = block
+            @stream = StringIO.new
+            @is_complete = false
+        end
+
+        def on_data(data, continuation)
+            @stream << String.CreateBinary(data.array)
+        end
+
+        def on_end
+            @is_complete = true
+            if @stream.length > 0
+                @stream.rewind
+                while @stream.gets != "\r\n" do end
+            end
+            @on_end.call(self) if @on_end
+        end
+
+        def method
+            @head.Method.to_s
+        end
+
+        def uri
+            @head.uri.to_s
+        end
+
+        def version
+            @head.version.to_s
+        end
+
+        def headers
+            @head.headers
+        end
+
+        def body
+            @stream
+        end
+
+        def is_complete?
+            @is_complete
+        end
+    end
+
+    class ResponseBody
+        include Kayak::IDataProducer
+
+        def initialize(body)
+            @body = body
+        end
+
+        def connect(channel)
+            @body.each do |part|
+                channel.on_data(part.to_byte_segment, nil)
+            end
+            channel.on_end
+        end
+    end
+
+    def self.scheduler(ip_endpoint, &block)
+        scheduler = Kayak::KayakScheduler.new(SchedulerHandler.new)
+        scheduler.post(proc do
+            factory, request = Kayak::KayakServer.factory
+            request = RequestHandler.new(block)
+            http = Kayak::Http::HttpServerExtensions.create_http(factory, request)
+            http.listen(ip_endpoint)
+        end)
+        scheduler
+    end
+end
+
 module Rack
     module Handler
         class Kayak
-            include System::Net
+            include Rayak, System::Net
+
             attr_reader :application
 
             DEFAULT_HOST = '0.0.0.0'
@@ -43,31 +130,15 @@ module Rack
             def self.run(application, options = {})
                 handler = Kayak.new(application)
 
-                http, scheduler = *::Kayak.http(
-                    options[:host] || DEFAULT_HOST, options[:port] || DEFAULT_PORT
+                ip_endpoint = IPEndPoint.new(
+                    IPAddress.parse(options[:host] || DEFAULT_HOST),
+                    options[:port].to_i || DEFAULT_PORT
                 )
 
-                http.on_request do |_, args|
-                    body_stream = StringIO.new
-                    request, response = args.request, args.response
-
-                    if has_body = request.headers.contains_key('Content-Length')
-                        request.on_body do |_, args|
-                            body_stream << String.CreateBinary(args.data.array)
-                        end
-                    end
-
-                    request.on_end do |_, _|
-                        if has_body
-                            # Since the Kayak::Http::Response#on_body event actually returns
-                            # the whole HTTP message including the headers, we must position
-                            # the stream at the end of the headers part. It is truly hackish,
-                            # but it will do for now.
-                            body_stream.rewind
-                            while body_stream.gets != "\r\n" do end
-                        end
-                        handler.process(request, response, body_stream)
-                    end
+                scheduler = Rayak.scheduler(ip_endpoint) do |head, body, response|
+                    body.connect(Rayak::Request.new(head, body) do |request|
+                        handler.process(request, response)
+                    end)
                 end
 
                 mutex, cv = Mutex.new, ConditionVariable.new
@@ -85,7 +156,7 @@ module Rack
                     end
                 end
 
-                yield http if block_given?
+                yield scheduler if block_given?
 
                 server_thread.join
             end
@@ -94,15 +165,15 @@ module Rack
                 @application = application
             end
 
-            def process(request, response, request_body_stream)
+            def process(request, response)
                 host, port = *request.headers['Host'].split(':')
                 (*, path, _, query, _) = URI.split(request.uri)
 
                 env = {
                     'SERVER_NAME'    => host,
                     'SERVER_PORT'    => (port || 80).to_i,
-                    'HTTP_VERSION'   => request.version.to_s,
-                    'REQUEST_METHOD' => request.Method.to_s,
+                    'HTTP_VERSION'   => request.version,
+                    'REQUEST_METHOD' => request.method,
                     'QUERY_STRING'   => query || '',
                     'SCRIPT_NAME'    => '',
                     'PATH_INFO'      => path,
@@ -112,11 +183,11 @@ module Rack
 
                 env.update({
                     'rack.version'      => [1, 0],
-                    'rack.input'        => request_body_stream,
+                    'rack.input'        => request.body,
                     'rack.errors'       => $stderr,
                     # kayak does not support https, url_scheme is always 'http'
                     'rack.url_scheme'   => 'http',
-                    'rack.multithread'  => true,
+                    'rack.multithread'  => false,
                     'rack.multiprocess' => false,
                     'rack.run_once'     => false,
                     'rack.session'      => nil  # TODO
@@ -124,14 +195,11 @@ module Rack
 
                 status, headers, body = *@application.call(env)
 
-                begin
-                    response.write_headers(status.to_s, headers.to_clr_headers)
-                    body.each do |part|
-                        response.write_body(part.to_byte_segment, nil)
-                    end
-                ensure
-                    response.end
-                end
+                head = ::Kayak::Http::HttpResponseHead.new
+                head.status = status.to_s
+                head.headers = headers.to_clr_headers
+
+                response.on_response(head, ResponseBody.new(body))
             end
 
             def rack_header(name)
